@@ -15,8 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/main-dark.png" width="330" alt="PodBar showing AirPods Pro battery levels, now playing controls, volume and microphone switch on Windows 11">
-  <img src="docs/main-light.png" width="330" alt="PodBar light theme with AirPods battery rings for left pod, right pod and charging case">
+  <img src="docs/demo.gif" width="425" alt="PodBar demo: AirPods battery on Windows, music pausing when a pod is taken out, volume control, smart microphone and settings">
 </p>
 
 ## What it does
@@ -27,6 +26,7 @@ On a Mac, AirPods show their battery, pause when you take one out, and connect w
 - **Ear detection and automatic pause** – music or video pauses when you take a pod out and resumes when you put it back. Choose between pausing when one pod is out, when both are out, or never.
 - **Connect and disconnect** – one button, instead of digging through Windows Bluetooth settings.
 - **AirPods microphone switch** – turn the AirPods microphone off so Windows keeps them in high-quality stereo mode, and back on when you need it for a call.
+- **Smart microphone** (optional) – turns the AirPods microphone on by itself when an app starts using a microphone (a call in Teams, Zoom or Discord, a browser, a game with voice chat) and off again a few seconds after it stops, so you get stereo quality the rest of the time without touching anything. Each app can be switched off individually from the tray menu.
 - **Now playing controls** – album art, title, artist, and previous / play-pause / next for whatever is playing.
 - **Volume slider** for the AirPods.
 - **Connection card** – pops up when your AirPods are detected, like on a Mac or iPhone.
@@ -35,6 +35,11 @@ On a Mac, AirPods show their battery, pause when you take one out, and connect w
 - **Global keyboard shortcuts** for the microphone switch, volume and the card.
 - **Light and dark theme**, following Windows and your accent colour.
 - **Start with Windows** (optional).
+
+<p align="center">
+  <img src="docs/main-dark.png" width="330" alt="PodBar showing AirPods Pro battery levels, now playing controls, volume and microphone switch on Windows 11">
+  <img src="docs/main-light.png" width="330" alt="PodBar light theme with AirPods battery rings for left pod, right pod and charging case">
+</p>
 
 <p align="center">
   <img src="docs/settings-dark.png" width="330" alt="PodBar settings: start with Windows, show card on connect, low battery alert, automatic pause">
@@ -80,6 +85,7 @@ PodBar uses only standard, user-mode Windows APIs:
 | Pause, resume, now playing | Windows media session API (`GlobalSystemMediaTransportControlsSessionManager`), the same one behind the Windows media flyout. |
 | Volume | Windows Core Audio (`IAudioEndpointVolume`). |
 | Microphone switch, output switching | Changes the Windows default recording / playback device through `IPolicyConfig`, the interface the Windows sound settings use. It is undocumented but has been stable for many Windows versions. |
+| Smart microphone | Watches for running recording streams with the Windows audio session API (`IAudioSessionManager2`), the same information the Windows volume mixer shows. It never records or reads audio itself. |
 | Connect, disconnect | Sends the Bluetooth audio driver the same reconnect / disconnect request the Windows sound flyout sends (`IKsControl`). |
 
 The broadcast format is decoded in [`AirPodsParser.cs`](AirPodsParser.cs).
@@ -108,6 +114,7 @@ Useful switches for development:
 
 - `PodBar.exe --log C:\path\log.txt` writes every received broadcast and every decision to a log file.
 - `PodBar.exe --preview C:\folder` renders the card with sample data to PNG files (this is how the screenshots above are made).
+- `PodBar.exe --demo-gif C:\folder\demo.gif` renders the animated demo at the top of this page, also from sample data.
 - `PodBar.exe --install` and `PodBar.exe --uninstall` run the built-in installer; add `--silent` to skip the dialogs.
 
 ## FAQ
@@ -120,6 +127,12 @@ That value is not being broadcast at the moment. The case shows "–" when both 
 
 **The sound is bad when I use the AirPods microphone.**
 That is a Bluetooth limitation, not PodBar: while the microphone is in use, Windows switches the AirPods to hands-free mode, which has low audio quality. Turn the AirPods microphone off in PodBar to use another microphone and keep stereo quality.
+
+**Smart microphone does not switch for my call app.**
+It changes the Windows *default* microphone. An app that is set to one specific microphone ignores that; set the app's microphone to "Default". Some apps only pick up a new default when a call starts, so the first seconds may use your other microphone.
+
+**A game or app keeps my AirPods in low-quality mode.**
+With the smart microphone on, any app that opens a microphone turns the AirPods microphone on, and that puts the AirPods in hands-free mode. If you do not want that for a particular game or app, right-click the tray icon, open **Smart microphone apps**, and untick it. Apps appear in that list once they have used a microphone. An app that keeps the microphone open all the time (voice assistants, some streaming tools) is a good candidate to untick.
 
 **Does it work with Beats?**
 Some Beats models broadcast in the same format and may show battery levels, but this is untested.

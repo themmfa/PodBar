@@ -16,7 +16,15 @@ static class Program
             return 0;
         }
 
-        // PodBar.exe --uninstall   (what Windows' "Installed apps" list runs)
+        // README demo: PodBar.exe --demo-gif C:\some\demo.gif  (renders a scripted walkthrough with sample data)
+        int demo = Array.IndexOf(args, "--demo-gif");
+        if (demo >= 0 && demo + 1 < args.Length)
+        {
+            PopupForm.RenderDemoGif(args[demo + 1]);
+            return 0;
+        }
+
+        // PodBar.exe --uninstall  (what Windows' "Installed apps" list runs)
         if (args.Contains("--uninstall")) return Installer.Uninstall(silent);
 
         // PodBar-Setup.exe, or PodBar.exe --install

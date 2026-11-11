@@ -145,6 +145,8 @@ public sealed class PopupForm : Form
                 }),
             new ToggleRow("Automatic output switching", () => "AirPods when in your ears, speakers when out",
                 () => settings.AutoOutputSwitch, v => settings.AutoOutputSwitch = v),
+            new ToggleRow("Smart microphone", () => "AirPods mic on while a call or game uses it",
+                () => settings.SmartMic, v => settings.SmartMic = v),
 
             new HeaderRow("SHORTCUTS  ·  CLICK, THEN PRESS KEYS  ·  BACKSPACE CLEARS"),
             new ShortcutRow("AirPods microphone on/off", () => settings.MicHotkey, v => settings.MicHotkey = v),
@@ -857,6 +859,95 @@ public sealed class PopupForm : Form
             using (var g = Graphics.FromImage(bmp)) form.PaintCard(g, scale);
             bmp.Save(Path.Combine(folder, name + ".png"), ImageFormat.Png);
         }
+    }
+
+    // ---- README demo (PodBar.exe --demo-gif <file>) ----
+
+    /// <summary>Renders a short scripted walkthrough with sample data to an animated GIF. No window, no audio, no real devices.</summary>
+    public static void RenderDemoGif(string path)
+    {
+        const float scale = 1.25f, captionHeight = 40;
+        int width = (int)(W * scale), height = (int)((H + captionHeight) * scale);
+
+        using var form = new PopupForm(new AppSettings(), new AudioControl());
+        form._theme = Theme.Dark(Color.FromArgb(10, 132, 255)); // fixed colours, independent of this PC's theme
+
+        var inEars = new AirPodsState("AirPods Pro 2", 80, 70, 60, false, false, true, true, true, -50);
+        var playing = new TrackInfo("Midnight Drive", "The Example Band", true);
+        var micOff = new AudioControl.DefaultStatus(true, false, "Microphone Array (Realtek Audio)", true);
+        var micOn = new AudioControl.DefaultStatus(true, true, "Headset (AirPods Pro)", true);
+
+        form._state = inEars;
+        form._track = playing;
+        form._mic = micOff;
+        form._link = AirPodsLink.Connected;
+        form._volume = ("Headphones (AirPods Pro)", 0.62f);
+
+        var frames = new List<(int[] Pixels, int DelayCs)>();
+
+        void Add(string caption, int delayCs = 5)
+        {
+            using var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                form.PaintCard(g, scale);
+                g.ResetClip();
+                using var strip = new SolidBrush(form._theme.BgBottom);
+                g.FillRectangle(strip, -1, H, W + 2, captionHeight + 2);
+                using var font = new Font("Segoe UI Semibold", 10f);
+                using var brush = new SolidBrush(form._theme.Text);
+                using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                g.DrawString(caption, font, brush, new RectangleF(0, H - 3, W, captionHeight), format);
+            }
+
+            var bits = bmp.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var pixels = new int[width * height];
+            Marshal.Copy(bits.Scan0, pixels, 0, pixels.Length);
+            bmp.UnlockBits(bits);
+            frames.Add((pixels, delayCs));
+        }
+
+        // 1. The card opens and the battery rings fill.
+        const string battery = "AirPods battery on Windows";
+        for (int i = 0; i <= 8; i++) { form._anim = i / 8f; Add(battery); }
+        Add(battery, 130);
+
+        // 2. A pod comes out: playback pauses. 3. It goes back in: playback resumes.
+        form._state = inEars with { RightInEar = false };
+        form._track = playing with { Playing = false };
+        Add("Take a pod out: music pauses", 190);
+        form._state = inEars;
+        form._track = playing;
+        Add("Put it back: music resumes", 160);
+
+        // 4. Volume slides down and back up.
+        const string controls = "Volume, now playing and connect in one card";
+        for (int i = 1; i <= 12; i++) { form._volume = ("Headphones (AirPods Pro)", 0.62f - 0.34f * Ease(i / 12f)); Add(controls); }
+        Add(controls, 40);
+        for (int i = 1; i <= 12; i++) { form._volume = ("Headphones (AirPods Pro)", 0.28f + 0.34f * Ease(i / 12f)); Add(controls); }
+        Add(controls, 90);
+
+        // 5. Smart microphone turns the AirPods mic on for a call and off afterwards.
+        form._mic = micOn;
+        Add("Smart microphone: on when a call starts", 190);
+        form._mic = micOff;
+        Add("...and off afterwards, for stereo quality", 190);
+
+        // 6. Settings, scrolled top to bottom.
+        const string settings = "Start with Windows, pause rules, shortcuts";
+        form._view = View.Settings;
+        Add(settings, 110);
+        float max = form.MaxScroll;
+        for (int i = 1; i <= 24; i++)
+        {
+            float t = i / 24f;
+            form._scroll = max * (t * t * (3 - 2 * t)); // smoothstep
+            Add(settings);
+        }
+        Add(settings, 170);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        GifWriter.Write(path, frames, width, height);
     }
 
     protected override void Dispose(bool disposing)

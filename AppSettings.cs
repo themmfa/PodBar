@@ -30,6 +30,13 @@ public sealed class AppSettings
     // Playback
     public PauseWhen PauseWhen { get; set; } = PauseWhen.OnePodOut;
     public bool AutoOutputSwitch { get; set; }
+    public bool SmartMic { get; set; }
+
+    /// <summary>
+    /// Process names (without .exe) the smart microphone should not react to. By default it reacts to every
+    /// app that opens a microphone, games included; apps switched off in the tray menu are listed here.
+    /// </summary>
+    public List<string> SmartMicIgnoredApps { get; set; } = [];
 
     // Global shortcuts, stored as System.Windows.Forms.Keys values (key + modifiers). 0 = none.
     public int MicHotkey { get; set; } = (int)(Keys.Control | Keys.Alt | Keys.M);

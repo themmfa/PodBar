@@ -15,6 +15,8 @@ public sealed class TrayApp : ApplicationContext
     readonly PopupForm _popup;
     readonly AirPodsScanner _scanner = new();
     readonly MediaController _media = new();
+    readonly SmartMic _smartMic;
+    readonly System.Windows.Forms.Timer _smartMicTimer = new() { Interval = 1500 };
     readonly System.Windows.Forms.Timer _staleTimer = new() { Interval = 5000 };
     readonly ToolStripMenuItem _statusItem = new("Searching for AirPods…") { Enabled = false };
 
@@ -28,6 +30,8 @@ public sealed class TrayApp : ApplicationContext
 
     public TrayApp()
     {
+        _smartMic = new SmartMic(_audio) { IgnoredApps = () => _settings.SmartMicIgnoredApps };
+        _smartMicTimer.Tick += (_, _) => _smartMic.Tick();
         _popup = new PopupForm(_settings, _audio);
         _ = _popup.Handle; // create the window handle now so BeginInvoke and global shortcuts work
 
@@ -40,9 +44,32 @@ public sealed class TrayApp : ApplicationContext
         var useMic = new ToolStripMenuItem("Use AirPods microphone");
         useMic.Click += (_, _) => _popup.ToggleMic();
 
+        // Per-app switches for the smart microphone. Every app that has used a microphone since PodBar started
+        // is listed and ticked (it triggers the smart mic); unticking one makes the smart mic ignore that app.
+        var smartApps = new ToolStripMenuItem("Smart microphone apps");
+
         var menu = new ContextMenuStrip();
         menu.Opening += (_, _) =>
         {
+            smartApps.Visible = _settings.SmartMic;
+            smartApps.DropDownItems.Clear();
+            var names = new SortedSet<string>(_settings.SmartMicIgnoredApps, StringComparer.OrdinalIgnoreCase);
+            names.UnionWith(_smartMic.SeenApps);
+            foreach (string name in names)
+            {
+                bool ignored = _settings.SmartMicIgnoredApps.Contains(name, StringComparer.OrdinalIgnoreCase);
+                var item = new ToolStripMenuItem(name) { Checked = !ignored };
+                item.Click += (_, _) =>
+                {
+                    if (ignored) _settings.SmartMicIgnoredApps.RemoveAll(a => string.Equals(a, name, StringComparison.OrdinalIgnoreCase));
+                    else _settings.SmartMicIgnoredApps.Add(name);
+                    _settings.Save();
+                };
+                smartApps.DropDownItems.Add(item);
+            }
+            if (names.Count == 0)
+                smartApps.DropDownItems.Add(new ToolStripMenuItem("Apps appear here once they use a microphone") { Enabled = false });
+
             var link = _popup.Link;
             linkItem.Text = link == AirPodsLink.Connected ? "Disconnect" : "Connect";
             linkItem.Enabled = link != AirPodsLink.NotPaired;
@@ -56,6 +83,7 @@ public sealed class TrayApp : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(linkItem);
         menu.Items.Add(useMic);
+        menu.Items.Add(smartApps);
         menu.Items.Add("Settings…", null, (_, _) => _popup.ShowCard(settingsView: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => ExitThread());
@@ -90,6 +118,8 @@ public sealed class TrayApp : ApplicationContext
 
         Log.Write($"Settings: pause when={_settings.PauseWhen}, auto output switch={_settings.AutoOutputSwitch}");
         MediaController.LogSessions();
+        var recorders = SmartMic.ActiveRecorders();
+        Log.Write($"Smart mic={_settings.SmartMic}; apps recording now: {(recorders.Count == 0 ? "none" : string.Join(", ", recorders))}");
 
         Render();
         _scanner.Start();
@@ -99,6 +129,10 @@ public sealed class TrayApp : ApplicationContext
     {
         _media.Enabled = _settings.PauseWhen != PauseWhen.Never;
         _media.OnlyWhenBothOut = _settings.PauseWhen == PauseWhen.BothPodsOut;
+
+        // The recording check only runs while the feature is on, so it costs nothing otherwise.
+        _smartMic.Enabled = _settings.SmartMic;
+        _smartMicTimer.Enabled = _settings.SmartMic;
     }
 
     void OnState(AirPodsState s)
@@ -223,6 +257,7 @@ public sealed class TrayApp : ApplicationContext
     {
         _scanner.Stop();
         _staleTimer.Dispose();
+        _smartMicTimer.Dispose();
         _tray.Visible = false;
         _tray.Dispose();
         _popup.Dispose();

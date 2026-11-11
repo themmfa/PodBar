@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- The windows10.0.19041.0 suffix gives access to the WinRT Bluetooth and media APIs. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <RootNamespace>PodBar</RootNamespace>
+
+    <!-- Product identity: the exe is PodBar.exe; these show in its file properties and in Windows' app list. -->
+    <AssemblyName>PodBar</AssemblyName>
+    <Product>PodBar</Product>
+    <AssemblyTitle>PodBar</AssemblyTitle>
+    <Description>AirPods controls for Windows</Description>
+    <Company>PodBar</Company>
+    <Version>1.0.0</Version>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+</Project>

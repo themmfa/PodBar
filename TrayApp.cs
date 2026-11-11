@@ -7,6 +7,8 @@ namespace PodBar;
 public sealed class TrayApp : ApplicationContext
 {
     static readonly TimeSpan StaleAfter = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan CardAfterAbsence = TimeSpan.FromMinutes(2);
+    const string Searching = "Searching for AirPods…";
     const int LowBatteryPercent = 20;
 
     readonly AppSettings _settings = AppSettings.Load();
@@ -22,11 +24,12 @@ public sealed class TrayApp : ApplicationContext
 
     AirPodsState? _state;
     DateTime _lastSeen;
-    string _message = "Searching for AirPods…";
+    string _message = Searching;
     string? _iconText;
     IntPtr _iconHandle;
     bool _lowBatteryAlerted;
     (bool Left, bool Right)? _ears; // last in-ear state acted on
+    bool? _outputWorn;              // worn state the playback device was last matched to; null = not matched yet
 
     public TrayApp()
     {
@@ -98,13 +101,21 @@ public sealed class TrayApp : ApplicationContext
         _scanner.StateReceived += s => _popup.BeginInvoke(() => OnState(s));
         _scanner.Failed += error => _popup.BeginInvoke(() =>
         {
-            _message = $"Bluetooth unavailable ({error}). Turn it on and restart.";
+            _message = $"Bluetooth is off or unavailable ({error}). Waiting for it to come back…";
             SetState(null);
         });
+        _scanner.Recovered += () =>
+        {
+            _message = Searching;
+            Render();
+        };
 
         _staleTimer.Tick += (_, _) =>
         {
             if (_state is not null && DateTime.UtcNow - _lastSeen > StaleAfter) SetState(null);
+
+            // Bring scanning back if the Bluetooth radio went away (switched off, or reset after sleep).
+            _scanner.EnsureRunning();
 
             // While the AirPods are connected to this PC, also accept weaker broadcasts so fewer updates are missed.
             _scanner.MinRssi = AirPodsConnection.GetLink() == AirPodsLink.Connected
@@ -135,44 +146,70 @@ public sealed class TrayApp : ApplicationContext
         _smartMicTimer.Enabled = _settings.SmartMic;
     }
 
-    void OnState(AirPodsState s)
+    async void OnState(AirPodsState s)
     {
         // "Only my AirPods": drop broadcasts from any other model.
         if (_settings.LockedModel != "" && s.Model != _settings.LockedModel) return;
 
+        // The card pops up when the AirPods appear, but not when they merely reappear after a short gap
+        // in reception (a weak signal can drop them for longer than the stale timeout).
         bool firstSighting = _state is null;
+        bool longAbsence = _lastSeen == default || DateTime.UtcNow - _lastSeen > CardAfterAbsence;
         _lastSeen = DateTime.UtcNow;
         SetState(s);
         CheckLowBattery(s);
 
+        if (firstSighting && longAbsence && _settings.ShowCardOnConnect && !_popup.Visible) _popup.ShowCard(autoHideMs: 6000);
+
         // React on the first packet that reports a change. Waiting for a second one to confirm cost about a
         // second (broadcasts arrive roughly once a second), and the in-ear flags proved stable in practice.
         var ears = (s.LeftInEar, s.RightInEar);
+        Task pauseOrResume = Task.CompletedTask;
         if (_ears != ears)
         {
-            var previous = _ears;
             _ears = ears;
-            OnEarsChanged(previous, ears);
+            pauseOrResume = _media.OnEarsAsync(ears.LeftInEar, ears.RightInEar);
         }
 
-        // Mimic the Mac/iPhone card: pop up briefly when the AirPods show up.
-        if (firstSighting && _settings.ShowCardOnConnect && !_popup.Visible) _popup.ShowCard(autoHideMs: 6000);
+        // When the pods come out, let the pause land before the sound moves to the speakers;
+        // otherwise the music would play out loud for a moment.
+        if (!ears.LeftInEar && !ears.RightInEar)
+        {
+            try { await pauseOrResume; } catch { /* logged by the media controller */ }
+        }
+
+        // Use the latest state: another broadcast may have been handled while waiting.
+        if (_ears is var (left, right)) SyncOutput(worn: left || right);
     }
 
-    void OnEarsChanged((bool Left, bool Right)? previous, (bool Left, bool Right) now)
+    /// <summary>
+    /// Automatic output switching: AirPods while worn, the previous device once both pods are out.
+    /// Runs on every broadcast and acts whenever the worn state differs from the one it last matched,
+    /// which includes the first sighting. (Reacting only to a change it watched happen missed the case
+    /// where the AirPods come out of the case and go straight into the ears.)
+    /// It never repeats an action for the same worn state, so a manual device choice is left alone.
+    /// </summary>
+    void SyncOutput(bool worn)
     {
-        _media.OnEars(now.Left, now.Right);
-
-        // Automatic output switching: AirPods while worn, the previous device once both are out.
-        if (!_settings.AutoOutputSwitch || previous is null) return;
-        bool wasWorn = previous.Value.Left || previous.Value.Right;
-        bool worn = now.Left || now.Right;
-        if (wasWorn == worn) return;
+        if (!_settings.AutoOutputSwitch)
+        {
+            _outputWorn = null;
+            return;
+        }
+        if (_outputWorn == worn) return;
 
         var output = _audio.GetStatus(EDataFlow.Render);
-        Log.Write($"Output switching: worn={worn}, {output}");
-        if (worn && output is { Present: true, Active: false }) _audio.SetAirPodsDefault(EDataFlow.Render, true);
-        else if (!worn && output is { Active: true, CanSwitch: true }) _audio.SetAirPodsDefault(EDataFlow.Render, false);
+        if (worn)
+        {
+            if (!output.Present) return; // not connected to this PC yet; try again on the next broadcast
+            if (!output.Active) _audio.SetAirPodsDefault(EDataFlow.Render, true);
+        }
+        else if (output is { Active: true, CanSwitch: true })
+        {
+            _audio.SetAirPodsDefault(EDataFlow.Render, false);
+        }
+        Log.Write($"Output switching: worn={worn}, was {output}");
+        _outputWorn = worn;
     }
 
     /// <summary>One notification each time a pod that is not charging falls to the threshold.</summary>
@@ -198,7 +235,13 @@ public sealed class TrayApp : ApplicationContext
     {
         if (s is not null && s == _state) return;
         _state = s;
-        if (s is null) _ears = null;
+        if (s is null)
+        {
+            // The AirPods went quiet (in the closed case, or out of range): start fresh at the next sighting.
+            _ears = null;
+            _outputWorn = null;
+            _media.Reset();
+        }
         Render();
     }
 

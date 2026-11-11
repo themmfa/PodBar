@@ -46,6 +46,12 @@ public sealed class AudioControl
         {
             var devices = ActiveDevices(flow);
             var current = DefaultDevice(flow);
+
+            // Remember the device in use whenever it is not the AirPods, so "switch away from the AirPods" can
+            // return to it. Without this, a default that Windows changed by itself left nothing to return to
+            // and the fallback picked an arbitrary device (for example a monitor's speakers).
+            if (current is { IsAirPods: false }) _previous[flow] = current.Id;
+
             bool present = devices.Any(d => d.IsAirPods);
             bool active = current?.IsAirPods == true;
             bool canSwitch = active ? devices.Any(d => !d.IsAirPods) : present;

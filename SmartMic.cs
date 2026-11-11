@@ -18,8 +18,11 @@ public sealed class SmartMic(AudioControl audio)
     // "In a call" is a debounced state: it starts with the first recording stream and ends only after
     // IdleDelay without one. Short gaps are normal (a stream pauses briefly when Windows moves it to
     // another microphone) and must not count as a new call.
-    bool? _inCall;         // null until the first check, so a recording already in progress is not treated as "just started"
-    bool _turnedOnByUs;    // only undo what we did; never override a manual choice
+    // A recording already running when PodBar starts (or when the feature is switched on) counts as a call
+    // that just started, so the result does not depend on which of the two happened first.
+    bool _inCall;
+    bool _turnedOnByUs;     // only undo what we did; never override a manual choice
+    bool _awaitingAirPods;  // the call started while the AirPods were not connected; switch once they are
     DateTime? _idleSince;
 
     string _lastIgnored = "";
@@ -37,8 +40,9 @@ public sealed class SmartMic(AudioControl audio)
     {
         if (!Enabled)
         {
-            _inCall = null;
+            _inCall = false;
             _turnedOnByUs = false;
+            _awaitingAirPods = false;
             _idleSince = null;
             return;
         }
@@ -59,27 +63,33 @@ public sealed class SmartMic(AudioControl audio)
         if (recorders.Count > 0)
         {
             _idleSince = null;
-            bool callStarted = _inCall == false;
+            bool callStarted = !_inCall;
             _inCall = true;
-            if (!callStarted) return; // act once per call; if the user switches the mic off mid-call, leave it off
+
+            // Act once per call: if the user switches the mic off mid-call, leave it off.
+            // The one exception is a call that began before the AirPods were connected.
+            if (!callStarted && !_awaitingAirPods) return;
 
             var mic = audio.GetStatus(EDataFlow.Capture);
-            Log.Write($"Smart mic: call started ({string.Join(", ", recorders.Select(r => r.Process).Distinct())} recording); AirPods mic {mic}");
+            if (callStarted)
+                Log.Write($"Smart mic: call started ({string.Join(", ", recorders.Select(r => r.Process).Distinct())} recording); AirPods mic {mic}");
+
+            _awaitingAirPods = !mic.Present;
             if (mic is { Present: true, Active: false } && audio.SetAirPodsDefault(EDataFlow.Capture, true))
+            {
                 _turnedOnByUs = true;
+                if (!callStarted) Log.Write("Smart mic: AirPods connected during the call; microphone switched on");
+            }
             return;
         }
 
-        if (_inCall != true)
-        {
-            _inCall = false;
-            return;
-        }
+        if (!_inCall) return;
 
         _idleSince ??= DateTime.UtcNow;
         if (DateTime.UtcNow - _idleSince < IdleDelay) return;
 
         _inCall = false;
+        _awaitingAirPods = false;
         _idleSince = null;
         if (!_turnedOnByUs) return;
 

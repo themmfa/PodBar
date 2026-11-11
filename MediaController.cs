@@ -7,8 +7,11 @@ public sealed class MediaController
 {
     const GlobalSystemMediaTransportControlsSessionPlaybackStatus Playing =
         GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+    const GlobalSystemMediaTransportControlsSessionPlaybackStatus Paused =
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus.Paused;
 
     readonly List<string> _pausedApps = []; // apps we paused, so only those are resumed
+    readonly SemaphoreSlim _gate = new(1, 1); // one pause/resume at a time, in order
     bool _onlyWhenBothOut;
     (bool Left, bool Right)? _ears;
     bool? _listening;
@@ -33,8 +36,22 @@ public sealed class MediaController
 
     bool IsListening(bool left, bool right) => _onlyWhenBothOut ? left || right : left && right;
 
-    /// <summary>Call with the debounced in-ear state whenever it changes.</summary>
-    public async void OnEars(bool left, bool right)
+    /// <summary>
+    /// Call when the AirPods go quiet (closed case, out of range). The next sighting then only sets a new
+    /// baseline: music paused before the AirPods went away is not resumed when they come back much later.
+    /// </summary>
+    public void Reset()
+    {
+        _ears = null;
+        _listening = null;
+        _pausedApps.Clear();
+    }
+
+    /// <summary>
+    /// Call with the in-ear state whenever it changes. The returned task completes once any pause or
+    /// resume has been sent, so the caller can wait for a pause before moving the sound to another device.
+    /// </summary>
+    public async Task OnEarsAsync(bool left, bool right)
     {
         _ears = (left, right);
         bool listening = IsListening(left, right);
@@ -45,8 +62,12 @@ public sealed class MediaController
         Log.Write($"Ears: left={left} right={right} -> listening={listening} (was {previous?.ToString() ?? "unknown"}; rule: {rule}; auto pause {(Enabled ? "on" : "off")})");
         if (previous is null || previous == listening || !Enabled) return;
 
+        await _gate.WaitAsync();
         try
         {
+            // The state may have flipped again while an earlier pause/resume was in flight; then this one is moot.
+            if (_listening != listening) return;
+
             var manager = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
             var sessions = manager.GetSessions();
 
@@ -68,6 +89,8 @@ public sealed class MediaController
                 foreach (var session in sessions)
                 {
                     if (!_pausedApps.Contains(session.SourceAppUserModelId)) continue;
+                    // Only resume what is still paused; if the user stopped or restarted it meanwhile, leave it.
+                    if (session.GetPlaybackInfo().PlaybackStatus != Paused) continue;
                     Log.Write($"Resume {session.SourceAppUserModelId}: {await session.TryPlayAsync()}");
                 }
                 _pausedApps.Clear();
@@ -76,6 +99,10 @@ public sealed class MediaController
         catch (Exception ex)
         {
             Log.Write($"Media control failed: {ex.Message}");
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
 
